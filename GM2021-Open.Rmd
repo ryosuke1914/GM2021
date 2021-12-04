@@ -1,0 +1,786 @@
+---
+title: "Functional-morphological study on the Palaeolithic remains: A result of geometric morphometrics on the late Upper Palaeolithic blade industry."
+subtitle: 旧石器研究における「機能形態学」に向けて<br />－後期旧石器時代石刃石器群の幾何学的形態測定に基づく考察－
+author: "熊谷亮介"
+date: "`r Sys.Date()`"
+output:
+  rmdformats::readthedown:
+    highlight: kate
+    self_contained: true
+---
+```{r setup, include=FALSE}
+library(knitr)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=TRUE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+<br />
+
+# 1.Introduction / はじめに  
+## Readme  
+
+　本稿は旧石器研究18号に掲載された**「旧石器研究における「機能形態学」に向けて
+　－後期旧石器時代石刃石器群の幾何学的形態測定に基づく考察－」**の分析に用いた
+　統計解析ソフトR言語のスクリプトを公開するものです。
+　旧石器研究における再現性と透明性を確保することを目的としています。  
+　
+## Environment
+2021/12/1
+
+* Windows 10 Home 1909
+
+* R version ‘4.1.2’ (Bird Hippie)　[link](https://cran.r-project.org/src/base/R-4)
+
+* RStudio
+Version 1.3.959[link](www.rstudio.com)
+
+## Contact / Sources
+
+* Ryosuke KUMAGAI / 熊谷亮介  
+　宮城県教育庁文化財課
+　Email: ryosuke.kumagai28[@]gmail.com  
+　
+* Github:ryosuke1914/GM2021 [link](https://github.com/ryosuke1914/GM2021)  
+
+* ReserchMap [link](https://researchmap.jp/Kumagai.r)  
+
+# 2.Prepare / 事前準備 {.tabset .tabset-fade .tabset-pills}
+## Install & library packages
+<br />
+
+解析・描画に必要なパッケージのリストを提示します。  
+インストールされていないパッケージをインストールし、一括で呼び出し（library)します。
+
+```{r install.pakages}
+targetPackages <- c("formatR","RCurl","tidyverse","ggmap","sf","shadowtext",
+                    "ggforce","patchwork","readxl","Momocs","Morpho",
+                    "Rvcg","researchscripts","maptools","readr",
+                    "rmdformats","rmarkdown")
+newPackages <- targetPackages[!(targetPackages %in% installed.packages()[,"Package"])]
+if(length(newPackages)) install.packages(newPackages, repos = "http://cran.us.r-project.org")
+for(package in targetPackages) library(package, character.only = T)
+
+```
+
+## Downloading Data
+　専用のフォルダを作成し、各種データをダウンロード。
+
+```{r download}
+
+#　データを保存するためのフォルダをWD内に作成
+#　再帰処理回避のため既にある場合は省略
+if(charmatch("GM2021-dataset",
+             list.files(all.files = TRUE),
+             nomatch = 0)== 0) {  
+  dir.create("GM2021-dataset")
+}
+
+#　日本地図：rdsファイルのダウンロード(既にデータをダウンロード済みの場合は省略)
+list <- list.files("GM2021-dataset", full.names=T)
+if(charmatch("GM2021-dataset/jpn.rds", 
+             list, nomatch = 0) == 0) {  
+  download.file("https://biogeo.ucdavis.edu/data/gadm3.6/Rsp/gadm36_JPN_1_sp.rds",
+  destfile = "GM2021-dataset/jpn.rds")
+}
+
+#　楕円フーリエ用ggplot関数のダウンロード
+#　MomocsのMorphospace関数のソースから改変
+list <- list.files("GM2021-dataset", full.names=T)
+if(charmatch("GM2021-dataset/morphospace for ggplot2.R", 
+             list, nomatch = 0) == 0) {  
+  download.file("https://github.com/ryosuke1914/GM2021/blob/main/morphospace%20for%20ggplot2.R",
+  destfile = "GM2021-dataset/morphospace for ggplot2.R")
+}
+
+
+# 属性表CSVのダウンロード（https://github.com/ryosuke1914/GM2021)
+download.file("https://raw.githubusercontent.com/ryosuke1914/GM2021/ad8b78a12f8ce7558578836c94d94c42a40abe5c/LWT.csv",
+                destfile = "GM2021-dataset/LWT.csv",method = "curl")
+# 日本旧石器時代遺跡DB（東北地方）のダウンロード（日本旧石器学会HP)
+download.file("http://palaeolithic.jp/data/Excel/02_07_Tohoku.xls",
+                destfile = "GM2021-dataset/Tohoku.xls",method = "curl")
+
+```
+
+# 3.Maps / 遺跡地図の描画
+　対象資料を含む旧石器時代遺跡の分布図を、日本旧石器学会が発行するDBをもとに作成します。  
+
+## a.データの加工{.tabset .tabset-fade .tabset-pills}
+###  緯度経度の変換
+　日本旧石器学会HPからダウンロードしたDBを読み込み、両県の緯度経度（土分秒）を10進法記法に変換する。
+
+```{r maps, echo=FALSE, warning=FALSE}
+#DBに載っていない遺跡の緯度・経度
+TKloc <- c(38.688888,140.282222)
+SZloc <- c(38.514066,140.370486)
+
+#DBの読み込みとエクセルシートの統合
+t<-c(rep("text",11),"text","numeric",rep("text",25),"date",rep("text",3))
+Sheets <- excel_sheets("GM2021-dataset/Tohoku.xls")
+Sheets <- Sheets[c(1,3,5,7,9,11)]
+data <- Sheets%>%
+ map_dfr(~read_excel("GM2021-dataset/Tohoku.xls", 
+                     col_types = t, sheet =.x)%>% 
+             mutate(sheet = .x))
+data<- data[c(3,10,11,14)]
+colnames(data)<-c("Site","lat","lon","KN")
+
+lat1 <- as.numeric(str_sub(data$lat, start=1, end=2))
+lat2 <- as.numeric(str_sub(data$lat, start=3, end=4))
+lat3 <- as.numeric(str_sub(data$lat, start=5, end=6))
+lat <- lat1+(lat2+lat3/60)/60
+
+lon1 <- as.numeric(str_sub(data$lon, start=1, end=3))
+lon2 <- as.numeric(str_sub(data$lon, start=4, end=5))
+lon3 <- as.numeric(str_sub(data$lon, start=6, end=7))
+lon <- lon1+ (lon2+lon3/60)/60
+latlon<-data.frame(lat,lon)
+
+#ナイフ形石器が出土した遺跡のみを抽出
+data[2:3]<-latlon
+data <- data%>%
+  filter(!is.na(KN))
+d <- data.frame(data[2:3]%>%
+  filter(!is.na(lat)))
+
+#対象遺跡のみを抽出（地図上のマークを変更するため）
+
+Selected<-data%>%
+  filter(Site%in%c("お仲間林遺跡","太郎水野２遺跡","岩井沢遺跡"))
+Selected <- Selected[2:3]
+Selected <- rbind(Selected,TKloc,SZloc)
+Selectednames <- c("お仲間林遺跡","太郎水野２遺跡","岩井沢遺跡","高倉山遺跡","清水西遺跡")
+Selected <- cbind(Selected,Selectednames)
+```
+
+###  下図の作成(ggmap)
+　stamenmap から下図となる地図を読み込み、範囲・縮尺を設定。
+```{r maps 2}
+#東北日本全域
+map <- ggmap(get_stamenmap(maptype="terrain-background",
+                              color="bw",
+                              rbind(as.numeric(c(138.5, 36.0,142.5, 42.0))),
+                              zoom = 10))
+#山形県域
+map2 <- ggmap(get_map(maptype="terrain",
+                         color="bw",
+                         rbind(as.numeric(c(139.3, 37.6,141.0, 39.3))),
+                         zoom = 10))
+print(map)
+print(map2)
+```
+
+###  県堺データを抽出
+```{r maps 3}
+jpn<-readr::read_rds("GM2021-dataset/jpn.rds")
+yamagata<-jpn[jpn$NAME_1=="Yamagata",]
+yamagata<-fortify(yamagata)
+miyagi<-jpn[jpn$NAME_1=="Miyagi",]
+miyagi<-fortify(miyagi)
+akita<-jpn[jpn$NAME_1=="Akita",]
+akita<-fortify(akita)
+fukushima<-jpn[jpn$NAME_1=="Fukushima",]
+fukushima<-fortify(fukushima)
+iwate<-jpn[jpn$NAME_1=="Iwate",]
+iwate<-fortify(iwate)
+aomori<-jpn[jpn$NAME_1=="Aomori",]
+aomori<-fortify(aomori)
+
+```
+
+
+## b.遺跡地図の作成{.tabset .tabset-fade .tabset-pills}
+###  東北地方の広域地図
+下図をもとに、県境・遺跡の位置などを描画。
+```{r maps 4}
+sites<-  
+  map +  
+  geom_point(data=d, 
+             aes(x =lon, y =lat),  
+             size=2,
+             color = 1)+  
+  geom_point(data=Selected,
+             aes(x=lon,y=lat),
+             size=3,
+             shape=17, 
+             color="white")+  
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size=3),
+        axis.ticks = element_blank())+
+  theme(aspect.ratio=1,
+        plot.background = element_rect(fill = NA,color=NA),
+        panel.background = element_rect(fill = NA,color=NA))+
+  coord_fixed()
+
+sites
+```
+
+###  山形県域の拡大図
+```{r maps 5}
+
+siteS2 <- map2+
+  geom_point(data = d, 
+             aes(x = lon,
+                 y = lat),
+             size = 2,
+             color = "black")+
+   geom_point(data=Selected,
+             aes(x=lon,y=lat),
+             size=3,
+             shape=17, 
+             color="white")+
+  geom_shadowtext(data = Selected,
+                  aes(x=lat,y=lon,label = Selectednames),
+                  size = 2,
+                  position =position_nudge(y = - 0.03))+
+  geom_polygon(aes(x=long,y=lat,group=group),fill=NA,color="black",data=yamagata)+
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text = element_text(size=3),
+        axis.ticks = element_blank())+
+  theme(aspect.ratio=0.5,plot.background = element_rect(fill = NA,color=NA),
+        panel.background = element_rect(fill = NA,color=NA))+
+  coord_fixed()
+siteS2
+```
+
+# 4.Size / 石器サイズの分析{.tabset .tabset-fade .tabset-pills}
+
+## a. 長幅散布図
+
+```{r LWT}
+#CSVデータの読み込み
+LWT<-read.csv("GM2021-dataset/LWT.csv")
+TK<-filter(LWT,Site=="TK")
+OM<-filter(LWT,Site=="OM")
+TM<-filter(LWT,Site=="TM")
+SZ<-filter(LWT,Site=="SZ")
+IZ<-filter(LWT,Site=="IZ")
+```
+
+### 高倉山遺跡
+```{r TK}
+#高倉山遺跡の長幅散布図
+TKplot<-ggplot(TK)+
+  geom_point(aes(x=MXL, y=MXW,shape=Type,alpha=Type,colour=UseWare),size=4.5)+
+  stat_ellipse(aes(x=MXL, y=MXW, alpha=Type),level=0.8,lwd=1.0)+
+  scale_y_continuous(limits = c(0, 70))+
+  scale_x_continuous(limits = c(20, 170))+
+  coord_fixed(ratio=1)+
+  scale_shape_manual(values=c("KN"=16, "ES"=17, "BL"=15),labels = c(KN = "KN(28)", ES ="ES(51)", BL="BL(66)"))+
+  scale_alpha_manual(values=c("KN"=1.0, "ES"=0.5, "BL"=0.3),labels = c(KN = "KN(28)", ES ="ES(51)", BL="BL(66)")) +
+  scale_colour_manual(values=c("A"=3, "B"=4,"IF"=2),labels = c(A = "皮なめし", IF ="狩猟痕跡", B="動物解体"))+
+  labs(x = "Length(mm)",y = "Width(mm)", title="高倉山遺跡")+
+  theme_bw()+
+  theme(legend.position = c(0.01, 1), legend.justification = c(0, 1.1))
+print(TKplot)
+```
+
+### 太郎水野2遺跡
+```{r TM}
+TMplot<-ggplot(TM)+
+  geom_point(aes(x=MXL, y=MXW,shape=Type,alpha=Type,colour=UseWare),size=4.5)+
+  stat_ellipse(aes(x=MXL, y=MXW, alpha=Type),level=0.8,lwd=1.0)+
+  scale_y_continuous(limits = c(0, 70))+
+  scale_x_continuous(limits = c(20, 170))+
+  coord_fixed(ratio=1)+
+  scale_shape_manual(values=c("KN"=16, "ES"=17, "BL"=15),labels = c(KN = "KN(18)", ES ="ES(14)", BL="BL(19)"))+
+  scale_alpha_manual(values=c("KN"=1.0, "ES"=0.5, "BL"=0.3),labels = c(KN = "KN(18)", ES ="ES(14)", BL="BL(19)")) +
+  scale_colour_manual(values=c("A"=3, "AB"=5,"C"=6),labels = c(A = "皮なめし",AB = "端部皮なめし＋側縁切裁等", C="肉皮・軟質加工等"))+
+  labs(x = "Length(mm)",y = "Width(mm)", title="太郎水野2遺跡")+
+  theme_bw()+
+  theme(legend.position = c(0.01, 1), legend.justification = c(0, 1.1))
+print(TMplot)
+```
+
+### お仲間林遺跡
+```{r OM}
+OMplot<-ggplot(OM)+
+  geom_point(aes(x=MXL, y=MXW,shape=Type,alpha=Type),size=4.5)+
+  stat_ellipse(aes(x=MXL, y=MXW, alpha=Type),level=0.8,lwd=1.0)+
+  scale_y_continuous(limits = c(0, 70))+
+  scale_x_continuous(limits = c(20, 170))+
+  coord_fixed(ratio=1)+
+  scale_shape_manual(values=c("KN"=16,"BL"=15),labels = c(KN = "KN(9)", BL="BL(168)"))+
+  scale_alpha_manual(values=c("KN"=1.0,"BL"=0.3),labels = c(KN = "KN(9)", BL="BL(168)")) +
+  labs(x = "Length(mm)",y = "Width(mm)", title="お仲間林遺跡")+
+  theme_bw()+
+  theme(legend.position = c(0.01, 1), legend.justification = c(0, 1.1))
+OMplot
+```
+
+### 清水西遺跡
+```{r SZ}
+SZplot<-ggplot(SZ)+
+  geom_point(aes(x=MXL, y=MXW,shape=Type,alpha=Type,colour=UseWare),size=4.5)+
+  stat_ellipse(aes(x=MXL, y=MXW, alpha=Type),level=0.8,lwd=1.0)+
+  scale_y_continuous(limits = c(0, 70))+
+  scale_x_continuous(limits = c(20, 170))+
+  coord_fixed(ratio=1)+
+  scale_shape_manual(values=c("KN"=16,"BL"=15),labels = c(KN = "KN(33)", BL="BL(37)"))+
+  scale_alpha_manual(values=c("KN"=1.0,"BL"=0.3),labels = c(KN = "KN(33)", BL="BL(37)")) +
+  scale_colour_manual(values=c("C"=3, "IF"=2),labels = c(C = "皮・骨角カット等", IF ="刺突？"))+
+  labs(x = "Length(mm)",y = "Width(mm)", title="清水西遺跡")+
+  theme_bw()+
+  theme(legend.position = c(0.01, 1), legend.justification = c(0, 1.1))
+print(SZplot)
+```
+
+### 岩井沢遺跡
+```{r IZ}
+IZplot<-ggplot(IZ)+
+  geom_point(aes(x=MXL, y=MXW,shape=Type,alpha=Type),size=4.5)+
+  stat_ellipse(aes(x=MXL, y=MXW, alpha=Type),level=0.8,lwd=1.0)+
+  scale_y_continuous(limits = c(0, 70))+
+  scale_x_continuous(limits = c(20, 170))+
+  coord_fixed(ratio=1)+
+  scale_shape_manual(values=c("KN"=16,"BL"=15),labels = c(KN = "KN(5)", BL="BL(61)"))+
+  scale_alpha_manual(values=c("KN"=1.0,"BL"=0.3),labels = c(KN = "KN(5)", BL="BL(61)")) +
+  labs(x = "Length(mm)",y = "Width(mm)", title="岩井沢遺跡")+
+  theme_bw()+
+  theme(legend.position = c(0.01, 1), legend.justification = c(0, 1.1))
+print(IZplot)
+```
+
+## b.遺跡ごとの最大長
+```{r MXL}
+TKbox <- ggplot(TK)+
+  geom_boxplot(aes(x=Type,y=MXL,fill=UseWare))+
+  scale_fill_grey(labels = c(A = "皮なめし", IF ="狩猟痕跡", B="動物解体",AB = "端部皮なめし＋側縁切裁等", C="肉皮・軟質加工等",D = "皮・骨角カット等", IF2 ="刺突？"))+ guides(fill=FALSE)+
+  theme_bw()
+
+IZbox <- ggplot(IZ)+
+  geom_boxplot(aes(x=Type,y=MXL))+
+  scale_fill_grey(labels = c(A = "皮なめし", IF ="狩猟痕跡", B="動物解体",AB = "端部皮なめし＋側縁切裁等", C="肉皮・軟質加工等",D = "皮・骨角カット等", IF2 ="刺突？"))+ guides(fill=FALSE)+
+  theme_bw()
+
+SZbox <- ggplot(SZ)+
+  geom_boxplot(aes(x=Type,y=MXL,fill=UseWare))+
+  scale_fill_grey(labels = c(A = "皮なめし", IF ="狩猟痕跡", B="動物解体",AB = "端部皮なめし＋側縁切裁等", C="肉皮・軟質加工等",D = "皮・骨角カット等", IF2 ="刺突？"))+ guides(fill=FALSE)+
+  theme_bw()
+
+TMbox <- ggplot(TM)+
+  geom_boxplot(aes(x=Type,y=MXL,fill=UseWare))+
+  scale_fill_grey(labels = c(A = "皮なめし", IF ="狩猟痕跡", B="動物解体",AB = "端部皮なめし＋側縁切裁等", C="肉皮・軟質加工等",D = "皮・骨角カット等", IF2 ="刺突？"))+ guides(fill=FALSE)+
+  theme_bw()
+
+OMbox <- ggplot(OM)+
+  geom_boxplot(aes(x=Type,y=MXL))+
+  scale_fill_grey(labels = c(A = "皮なめし", IF ="狩猟痕跡", B="動物解体",AB = "端部皮なめし＋側縁切裁等", C="肉皮・軟質加工等",D = "皮・骨角カット等", IF2 ="刺突？"))+ guides(fill=FALSE)+
+  theme_bw()
+
+ylimits <- coord_cartesian(ylim = c(0,250))
+(IZbox+ylimits+SZbox+ylimits+OMbox+ylimits+TMbox+ylimits+TKbox+ylimits)+
+  plot_layout(nrow=1)
+
+ggplot(LWT)+
+  geom_boxplot(aes(x=Site,y=MXL,fill=UseWare),width=1)+
+  scale_fill_grey(labels = c(A = "皮なめし", IF ="狩猟痕跡", B="動物解体",AB = "端部皮なめし＋側縁切裁等", C="肉皮・軟質加工等",D = "皮・骨角カット等", IF2 ="刺突？"))+
+  theme_bw()
+```
+
+## c.TCSA箱ひげ図
+```{r TCSA}
+ggplot(LWT, aes(x=Site, y=TCSA))+
+  geom_boxplot(aes(fill=UseWare))+
+  theme_bw()+
+  scale_fill_grey()+
+  coord_fixed(ratio=0.002)
+```
+
+
+# 5.EFA　/楕円フーリエ解析{.tabset .tabset-fade .tabset-pills}
+
+##  EFAの準備と実行
+```{r EFA, message=FALSE, warning=FALSE}
+#ggplot2でMorphospaceを表示するための関数を設定、読み込み
+source("morphospace for ggplot2.R")
+
+#二値化した輪郭データを格納したフォルダから、jpegファイル名を一括して読み込む。full.name=TRUEを指定。
+#画像データは非公開
+list<-list.files("all and used",full.name=T)
+```
+
+```{r EFA0, results='hide',message=FALSE, warning=FALSE}
+#jepgを座標値に変換→out型に変換
+import<-import_jpg(list)
+outlines<-Out(import)
+
+#輪郭のサイズ・位置を基準化する。重心合わせ→長軸合わせ→（90度転回）→面積で基準化。
+preform<-coo_center(outlines)
+preshape<-coo_align(preform)
+shape<-Out(sapply(preshape$coo,function(x){x/sqrt(coo_area(x))}))
+```
+
+```{r EFA1}
+#一覧表示。ここで誤転回や形の崩れを確認のこと。
+pile(shape)
+panel(shape)
+
+#楕円フーリエ解析の次数を決定する。
+cal <- calibrate_harmonicpower_efourier(shape, nb.h=10)
+cal$gg
+cal$minh　#→次数●で99.9%までカバーするので、●を採用。
+
+#楕円フーリエ解析を実行（norm=Fを採用）。
+E<-efourier(shape,10,norm=F) 
+
+#結果（E）を対象に主成分分析(相関係数による）を実行。
+P<-PCA(E,scale.=F)
+
+#データのグループ分け、色・サイズ・マーク（shape)などを分けるための用意。
+Site<-c(rep("TKES",22),rep("TKESA",29),rep("TKBL",47),rep("TMBL",7),
+        rep("TMBLA",4),rep("TKKN",15),rep("TKKNI",10),rep("TKKNA",3),
+        rep("TMES",3),rep("TMESA",4),rep("TMESAB",7),rep("TMKNA",16),
+        rep("TMKN",2),rep("OMBL",86),rep("SZKN",14),rep("SZBL",29),
+        rep("SZKNA",10),rep("SZBLA",3),rep("IZBL",77),rep("IZKN",6))  
+
+Site2<-c(rep("TK",98),rep("TM",11),rep("TK",28),rep("TM",32),rep("OMBL",86),rep("SZ",56),rep("IZ",83))
+Site2<-factor(Site2, levels = c("IZ","SZ","TM","TK","OMBL"))
+
+#PCAの結果を表示。操作用のデータフレーム(da)に格納。
+#→PC6までに累計寄与率の95%に達するため、以下でPC6まで表示。
+scree<-scree_plot(P) 
+PC<-PCcontrib(P,nax=1:6)
+
+PC1<-P$x[,"PC1"]
+PC2<-P$x[,"PC2"]
+PC3<-P$x[,"PC3"]
+PC4<-P$x[,"PC4"]
+PC5<-P$x[,"PC5"]
+
+#ggplot2に渡すためのデータフレームを作成
+da<-data.frame(PC1,PC2,PC3,PC4,Site,Site2)
+da2<-data.frame(PC1,PC2,PC3,PC4,Site)%>%
+  filter(Site %in%c("IZBL","IZKN","SZBL","SZBLA","SZKNA","SZKN"))
+da3<-data.frame(PC1,PC2,PC3,PC4,Site)%>%
+  filter(Site %in%c("TMES","TMESA","TMESAB","TMKN","TMKNA","TMBL","TMBLA","OMBL"))
+da4<-data.frame(PC1,PC2,PC3,PC4,Site)%>%
+  filter(Site %in%c("TKBL","TKKN","TKKNI","TKKNA","TKES","TKESA","OMBL"))
+```
+
+##  全点の主成分分析結果
+```{r EFA2}
+
+#散布図・箱ひげ図等を描画=======================================================
+#全点
+result<-morphospacePCA_custom(P,xax="PC1",
+                              yax="PC2",
+                              pos.shp="range",
+                              size.shp= 0.3, 
+                              rotate.shp=pi/2,
+                              nb.shp=12, 
+                              nr.shp = 4,
+                              nc.shp = 3)
+result2<-result$gg+
+  geom_point(data=da, 
+             aes(x =PC1, y =PC2, colour=Site, shape=Site),size=2)+
+  scale_size_area()+
+  scale_shape_manual(values = c(1:20))+
+  stat_ellipse(data=da, 
+               aes(x =PC1, y =PC2,colour=Site),level=0.95,lwd=1.0)+
+  theme(panel.grid.major = element_line(colour = "gray90"), 
+        panel.grid.minor = element_line(colour = "gray90"), 
+        axis.title = element_text(size = 10), 
+        plot.title = element_text(size = 10), 
+        legend.text = element_text(size = 10), 
+        panel.background = element_rect(fill = NA, 
+                                        linetype = "twodash"),
+        plot.background = element_rect(linetype = "twodash"), 
+        legend.key = element_rect(fill = NA))+
+  labs(x = "PC1", y = "PC2")
+
+print(result2)
+
+  #IZSZ
+limits <- coord_cartesian(xlim = c(-0.4,0.4),ylim = c(-0.15,0.15))
+xlimits <- coord_cartesian(xlim = c(-0.4,0.4))
+ylimits <- coord_cartesian(ylim = c(-0.15,0.15))
+
+result<-morphospacePCA_custom(P,xax="PC2",
+                               yax="PC3",
+                               pos.shp="range",
+                               size.shp= 0.2, 
+                               rotate.shp=pi/2,
+                               nb.shp=12, 
+                               nr.shp = 4,
+                               nc.shp = 3)
+  
+```
+
+## 遺跡ごとの主成分分析結果分割
+### 岩井沢・清水西遺跡
+```{r EFA3}
+result4<-result$gg+
+  geom_point(data=da2, 
+             aes(x =PC2, y =PC3, colour=Site, shape=Site),size=3)+
+  limits+
+  stat_ellipse(data=da2, 
+             aes(x =PC2, y =PC3,colour=Site),level=0.8,lwd=1.0)+
+  scale_shape_manual(values=c("SZKN"=16, "SZKNA"=21, "SZBL"=22,"SZBLA"=15,"IZBL"=5, "IZKN"=8),labels = c(SZKN = "SZKN(14)", SZKNA ="SZKN-U(10)", SZBL="SZBL(29)",SZBLA ="SZBL-U(3)", IZBL="IZBL(77)", IZKN="IZKN(6)"))+
+  scale_colour_manual(values=c("SZKN"=1, "SZKNA"=2, "SZBL"=4,"SZBLA"=5,"IZBL"=8, "IZKN"=7),labels = c(SZKN = "SZKN(14)", SZKNA ="SZKN-U(10)", SZBL="SZBL(29)",SZBLA ="SZBL-U(3)", IZBL="IZBL(77)", IZKN="IZKN(6)"))+
+  theme(panel.grid.major = element_line(colour = "gray90"), 
+        panel.grid.minor = element_line(colour = "gray90"), 
+        axis.title = element_text(size = 10), 
+        plot.title = element_text(size = 10), 
+        legend.text = element_text(size = 10), 
+        panel.background = element_rect(fill = NA, 
+                                        linetype = "twodash"),
+        plot.background = element_rect(linetype = "twodash"), 
+        legend.key = element_rect(fill = NA))+
+  labs(x = "PC2", y = "PC3")
+  
+
+print(result4)
+
+Box1 <- ggplot(da2) + 
+  geom_boxplot(aes(x=PC1,y=Site,colour=Site))+
+  theme_classic()+
+  scale_colour_manual(values=c("SZKN"=1, "SZKNA"=2, "SZBL"=4,"SZBLA"=5,"IZBL"=8, "IZKN"=7))+ guides(colour=FALSE)
+
+Box2 <- ggplot(da2) + 
+  geom_boxplot(aes(x=PC2,y=Site,colour=Site))+
+  theme_classic()+
+  scale_colour_manual(values=c("SZKN"=1, "SZKNA"=2, "SZBL"=4,"SZBLA"=5,"IZBL"=8, "IZKN"=7))+ guides(colour=FALSE)
+                      
+Box3 <- ggplot(da2) + 
+  geom_boxplot(aes(x=PC3,y=Site,colour=Site))+
+  coord_flip(xlim = c(-0.15,0.15))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_colour_manual(values=c("SZKN"=1, "SZKNA"=2, "SZBL"=4,"SZBLA"=5,"IZBL"=8, "IZKN"=7))+ guides(colour=FALSE)
+                      
+#散布図と箱ひげ図を合成。
+wrap_plots((Box3)+(result4)+plot_spacer()+(Box2+xlimits)+
+  plot_layout(ncol=2, nrow=2, widths = c(1, 5), heights = c(5, 1)))
+```
+
+### お仲間林・太郎水野2遺跡 
+```{r EFA4}
+
+limits <- coord_cartesian(xlim = c(-0.4,0.4),ylim = c(-0.15,0.15))
+xlimits <- coord_cartesian(xlim = c(-0.4,0.4))
+ylimits <- coord_cartesian(ylim = c(-0.15,0.15))
+
+result<-morphospacePCA_custom(P,xax="PC2",
+                              yax="PC3",
+                              pos.shp="range",
+                              size.shp= 0.2, 
+                              rotate.shp=pi/2,
+                              nb.shp=12, 
+                              nr.shp = 4,
+                              nc.shp = 3)
+
+
+result5<-result$gg+
+  geom_point(data=da3, 
+             aes(x =PC2, y =PC3, colour=Site, shape=Site),size=3)+
+  limits+
+  stat_ellipse(data=da3, 
+               aes(x =PC2, y =PC3,colour=Site),level=0.8,lwd=1.0)+
+  scale_shape_manual(values=c("TMKN"=24, "TMKNA"=2, "TMBL"=22,"TMBLA"=15,"TMESA"=18,"TMESAB"=25,"TMES"=3,"OMBL"=4),labels = c(TMKN = "TMKN(2)", TMKNA ="TMKN-U(16)", TMBL="TMBL(7)",TMBLA ="TMBL-U(4)", TMESA="TMES-U(4)", TMESAB="TMES-U2(7)", TMES="TMES(3)", OMBL="OMBL(86)"))+
+  scale_colour_manual(values=c("TMKN"=2, "TMKNA"=7, "TMBL"=3,"TMBLA"=8,"TMESA"=5,"TMESAB"=6,"TMES"=4,"OMBL"=9),labels = c(TMKN = "TMKN(2)", TMKNA ="TMKN-U(16)", TMBL="TMBL(7)",TMBLA ="TMBL-U(4)", TMESA="TMES-U(4)", TMESAB="TMES-U2(7)", TMES="TMES(3)", OMBL="OMBL(86)"))+
+  theme(panel.grid.major = element_line(colour = "gray90"), 
+        panel.grid.minor = element_line(colour = "gray90"), 
+        axis.title = element_text(size = 10), 
+        plot.title = element_text(size = 10), 
+        legend.text = element_text(size = 10), 
+        panel.background = element_rect(fill = NA, 
+                                        linetype = "twodash"),
+        plot.background = element_rect(linetype = "twodash"), 
+        legend.key = element_rect(fill = NA))+
+  labs(x = "PC2", y = "PC3")
+
+
+print(result5)
+
+Box1 <- ggplot(da3) + 
+  geom_boxplot(aes(x=PC1,y=Site,colour=Site))+
+  theme_classic()+
+  scale_colour_manual(values=c("TMKN"=2, "TMKNA"=7, "TMBL"=3,"TMBLA"=8,"TMESA"=5,"TMESAB"=6,"TMES"=4,"OMBL"=9))+ guides(colour=FALSE)
+
+Box2 <- ggplot(da3) + 
+  geom_boxplot(aes(x=PC2,y=Site,colour=Site))+
+  theme_classic()+
+  scale_colour_manual(values=c("TMKN"=2, "TMKNA"=7, "TMBL"=3,"TMBLA"=8,"TMESA"=5,"TMESAB"=6,"TMES"=4,"OMBL"=9))+ guides(colour=FALSE)
+
+Box3 <- ggplot(da3) + 
+  geom_boxplot(aes(x=PC3,y=Site,colour=Site))+
+  coord_flip(xlim = c(-0.15,0.15))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_colour_manual(values=c("TMKN"=2, "TMKNA"=7, "TMBL"=3,"TMBLA"=8,"TMESA"=5,"TMESAB"=6,"TMES"=4,"OMBL"=9))+ guides(colour=FALSE)
+
+#散布図と箱ひげ図を合成。
+wrap_plots((Box3)+(result5)+plot_spacer()+(Box2+xlimits)+
+             plot_layout(ncol=2, nrow=2, widths = c(1, 5), heights = c(5, 1)))
+```
+
+### お仲間林・高倉山遺跡
+```{r EFA5}
+
+limits <- coord_cartesian(xlim = c(-0.4,0.4),ylim = c(-0.15,0.15))
+xlimits <- coord_cartesian(xlim = c(-0.4,0.4))
+ylimits <- coord_cartesian(ylim = c(-0.15,0.15))
+
+result<-morphospacePCA_custom(P,xax="PC2",
+                              yax="PC3",
+                              pos.shp="range",
+                              size.shp= 0.05, 
+                              rotate.shp=pi/2,
+                              nb.shp=12, 
+                              nr.shp = 4,
+                              nc.shp = 3)
+
+
+result6<-result$gg+
+  geom_point(data=da4, 
+             aes(x =PC2, y =PC3, colour=Site, shape=Site),size=3)+
+  limits+
+  stat_ellipse(data=da4, 
+               aes(x =PC2, y =PC3,colour=Site),level=0.8,lwd=1.0)+
+  scale_shape_manual(values=c("TKKN"=24, "TKKNA"=24, "TKBL"=22,"TKES"=15,"TKESA"=18,"TKKNI"=24, "OMBL"=4),labels = c(TKKN = "TKKN(17)", TKKNA ="TKKN-U(3)", TKKNI="TKKNI(8)",TKBL="TKBL(47)", TKESA="TKES-U(29)", TKES="TKES(22)", OMBL="OMBL(86)"))+
+  scale_colour_manual(values=c("TKKN"=2, "TKKNA"=7, "TKBL"=3,"TKES"=4,"TKESA"=5,"TKKNI"=6, "OMBL"=9),labels = c(TKKN = "TKKN(17)", TKKNA ="TKKN-U(3)",TKKNI="TKKNI(8)", TKBL="TKBL(47)", TKESA="TKES-U(29)", TKES="TKES(22)", OMBL="OMBL(86)"))+
+  theme(panel.grid.major = element_line(colour = "gray90"), 
+        panel.grid.minor = element_line(colour = "gray90"), 
+        axis.title = element_text(size = 10), 
+        plot.title = element_text(size = 10), 
+        legend.text = element_text(size = 10), 
+        panel.background = element_rect(fill = NA, 
+                                        linetype = "twodash"),
+        plot.background = element_rect(linetype = "twodash"), 
+        legend.key = element_rect(fill = NA))+
+  labs(x = "PC2", y = "PC3")
+
+
+print(result6)
+
+Box1 <- ggplot(da4) + 
+  geom_boxplot(aes(x=PC1,y=Site,colour=Site))+
+  theme_classic()+
+  scale_colour_manual(values=c("TKKN"=2, "TKKNA"=7, "TKBL"=3,"TKES"=4,"TKESA"=5,"TKKNI"=6, "OMBL"=9))+ guides(colour=FALSE)
+
+Box2 <- ggplot(da4) + 
+  geom_boxplot(aes(x=PC2,y=Site,colour=Site))+
+  theme_classic()+
+  scale_colour_manual(values=c("TKKN"=2, "TKKNA"=7, "TKBL"=3,"TKES"=4,"TKESA"=5,"TKKNI"=6, "OMBL"=9))+ guides(colour=FALSE)
+
+Box3 <- ggplot(da4) + 
+  geom_boxplot(aes(x=PC3,y=Site,colour=Site))+
+  coord_flip(xlim = c(-0.15,0.15))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_colour_manual(values=c("TKKN"=2, "TKKNA"=7, "TKBL"=3,"TKES"=4,"TKESA"=5,"TKKNI"=6, "OMBL"=9))+ guides(colour=FALSE)
+
+
+wrap_plots((Box3)+(result6)+plot_spacer()+(Box2+xlimits)+
+             plot_layout(ncol=2, nrow=2, widths = c(1, 5), heights = c(5, 1)))
+```
+
+### PC1の箱ひげ図
+```{r EFA6}
+
+PC1box<-ggplot(da)+
+  geom_boxplot(aes(x=Site,y=PC1,fill=Site2))+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 45))
+PC1box
+
+```
+
+
+#  6.SPHARM-PDM{.tabset .tabset-fade .tabset-pills}
+3DSlicerで出力したSPHARM記述の係数を主成分分析
+3DモデルからR上で解析する手順については構築中（21.12.1現在）
+
+## 準備
+```{r SPHARM,results='hide'}
+#Coefファイルをフォルダにまとめておく
+#Coefファイルの読み込み→3次元配列の作成
+list.coef<-list.files("Coef",full.names = T)
+name<-list(1:169,1:3,list.coef)
+arr<-array(0,dim = c(169,3,56),dimnames = name)
+
+for (i in list.coef) {
+  arr[,,i]<-read.coef(i)
+}
+
+name<-list(1:169,1:3,list.coef)
+dimnames(arr)<-name
+
+#遺跡・器種・使用痕の分類
+Site<-c(rep("TK-I",10),rep("TK-A",2),rep("SZ-A",7),rep("TM",2),rep("SZ",10),rep("TK",15),rep("TM-A",10))
+fact<-name2factor(arr,which = 1)
+
+#主成分分析の実行
+PCA<-groupPCA(
+  arr,
+  groups=fact,
+  rounds = 0,
+  tol = 0,
+  cv = TRUE,
+  mc.cores = parallel::detectCores(),
+  weighting = F
+)
+
+#結果をggplot2に渡すために格納
+Score<-as.data.frame(PCA$Scores)%>%
+  select(V1,V2,V3,V4)
+Score<- cbind(Score,Site)
+colnames(Score) <- c("PC1", "PC2", "PC3","PC4","Site")
+```
+
+## 主成分得点の散布図を作成
+```{r SPHARM1}
+
+limits <- coord_cartesian(xlim = c(-28,50),ylim = c(-30,30))
+xlimits <- coord_cartesian(xlim = c(-28,50))
+ylimits <- coord_cartesian(ylim = c(-30,30))
+
+result<-ggplot(data=Score)+
+  geom_point(aes(x =PC1, y =PC2,colour=Site,shape=Site),size=4,)+
+  limits+
+  scale_colour_manual(values=c("SZ-A"=1, "SZ"=4, "TK-I"=2,"TK-A"=5,"TK"=8, "TM"=7,"TM-A"=3),label=c("SZ-A"="SZ-A(7)","SZ"="SZ(10)","TM"="TM(2)","TM-A"="TM(14)","TK-I"="TK-I(8)","TK-A"="TK-A(3)","TK"="TK(17)"))+
+  scale_shape_manual(values=c("SZ-A"=0, "SZ"=22, "TK-I"=21,"TK-A"=19,"TK"=1, "TM"=2,"TM-A"=24),label=c("SZ-A"="SZ-A(7)","SZ"="SZ(10)","TM"="TM(2)","TM-A"="TM(14)","TK-I"="TK-I(8)","TK-A"="TK-A(3)","TK"="TK(17)"))+
+  stat_ellipse(aes(x =PC1, y =PC2,colour=Site),level=0.8,lwd=1.0)+
+  theme(panel.grid.major = element_line(colour = "gray90"), 
+        panel.grid.minor = element_line(colour = "gray90"), 
+        axis.title = element_text(size = 10), 
+        plot.title = element_text(size = 10), 
+        legend.text = element_text(size = 10), 
+        panel.background = element_rect(fill = NA, 
+                                        linetype = "twodash"), plot.background = element_rect(linetype = "twodash"), 
+        legend.key = element_rect(fill = NA)) +labs(x = "PC1", y = "PC2")
+
+Box1 <- ggplot(Score) + 
+  geom_boxplot(aes(x=PC1,y=Site,fill=Site))+
+  theme_classic()+
+  scale_fill_manual(values=c("SZ-A"=1, "SZ"=4, "TK-I"=2,"TK-A"=5,"TK"=8, "TM"=7,"TM-A"=3))+ guides(fill=FALSE)
+
+Box2 <- ggplot(Score) + 
+  geom_boxplot(aes(x=PC2,y=Site,fill=Site))+
+  coord_flip(xlim=c(-30,30))+
+  theme_classic()+
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values=c("SZ-A"=1, "SZ"=4, "TK-I"=2,"TK-A"=5,"TK"=8, "TM"=7,"TM-A"=3))+ guides(fill=FALSE)
+
+library(patchwork)
+plot02<-wrap_plots((Box2)+(result)+plot_spacer()+(Box1+xlimits)+
+             plot_layout(ncol=2, nrow=2, widths = c(1, 7.5), heights = c(6, 1)))
+plot02
+
+```
+
+
+
+
+
