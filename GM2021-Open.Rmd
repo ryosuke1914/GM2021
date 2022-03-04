@@ -1,6 +1,6 @@
 ---
 title: "Functional-morphological study on the Palaeolithic remains: A result of geometric morphometrics on the late Upper Palaeolithic blade industry."
-subtitle: 旧石器研究における「機能形態学」に向けて<br />－後期旧石器時代石刃石器群の幾何学的形態測定に基づく考察－
+subtitle: 旧石器研究における「機能形態学」に向けて<br />－後期旧石器時代石刃石器群の幾何学的形態測定学に基づく考察－
 author: "熊谷亮介"
 date: "`r Sys.Date()`"
 output:
@@ -102,8 +102,7 @@ if(charmatch("GM2021-dataset/morphospace for ggplot2.R",
 
 
 # 属性表CSVのダウンロード（https://github.com/ryosuke1914/GM2021)
-download.file("https://raw.githubusercontent.com/ryosuke1914/GM2021/ad8b78a12f8ce7558578836c94d94c42a40abe5c/LWT.csv",
-                destfile = "GM2021-dataset/LWT.csv",method = "curl")
+download.file("https://raw.githubusercontent.com/ryosuke1914/GM2021/main/Source.csv",destfile = "GM2021-dataset/Source.csv",method = "curl")
 # 日本旧石器時代遺跡DB（東北地方）のダウンロード（日本旧石器学会HP)
 download.file("http://palaeolithic.jp/data/Excel/02_07_Tohoku.xls",
                 destfile = "GM2021-dataset/Tohoku.xls",method = "curl")
@@ -259,7 +258,7 @@ siteS2
 
 ```{r LWT}
 #CSVデータの読み込み
-LWT<-read.csv("GM2021-dataset/LWT.csv")
+LWT<-read.csv("GM2021-dataset/Source.csv")
 TK<-filter(LWT,Site=="TK")
 OM<-filter(LWT,Site=="OM")
 TM<-filter(LWT,Site=="TM")
@@ -406,8 +405,9 @@ ggplot(LWT, aes(x=Site, y=TCSA))+
 source("morphospace for ggplot2.R")
 
 #二値化した輪郭データを格納したフォルダから、jpegファイル名を一括して読み込む。full.name=TRUEを指定。
-#画像データは非公開
-list<-list.files("all and used",full.name=T)
+
+#画像データはgithubから個別にダウンロード。あるいはリポジトリをクローン。
+list<-list.files("EFA-all",full.name=T)
 ```
 
 ```{r EFA0, results='hide',message=FALSE, warning=FALSE}
@@ -700,13 +700,15 @@ PC1box
 
 #  6.SPHARM-PDM{.tabset .tabset-fade .tabset-pills}
 3DSlicerで出力したSPHARM記述の係数を主成分分析
-3DモデルからR上で解析する手順については構築中（21.12.1現在）
+3DモデルからR上で解析する手順については構築中。
 
 ## 準備
 ```{r SPHARM,results='hide'}
-#Coefファイルをフォルダにまとめておく
+#Coefファイルをフォルダにまとめる。
+#個別にgithubからダウンロード（Cofficient フォルダ）。
 #Coefファイルの読み込み→3次元配列の作成
-list.coef<-list.files("Coef",full.names = T)
+
+list.coef<-list.files("Coefficient",full.names = T)
 name<-list(1:169,1:3,list.coef)
 arr<-array(0,dim = c(169,3,56),dimnames = name)
 
